@@ -73,7 +73,7 @@ func (s *Service) findDefaultEveLogPath() string {
 
 	var logPath string
 	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
-		logPath = filepath.Join(homeDir, "Documents", "EVE", "logs", "Gamelogs")
+		logPath = filepath.Join(homeDir, "Documents", "EVE", "logs")
 	} else {
 		logger.Sugar.Warnf("Unsupported OS for auto-detection: %s", runtime.GOOS)
 		return ""
