@@ -23,12 +23,18 @@ type Service struct {
 	// The presence of a key indicates a subscription is active.
 	subscriptions map[int64]*NotificationSettings
 	mu            sync.RWMutex
+
+	Subscribed   chan int64
+	Unsubscribed chan int64
 }
 
 // NewService creates a new, empty subscription service.
 func NewService() *Service {
 	return &Service{
 		subscriptions: make(map[int64]*NotificationSettings),
+
+		Subscribed:   make(chan int64, 10),
+		Unsubscribed: make(chan int64, 10),
 	}
 }
 
@@ -37,16 +43,31 @@ func (s *Service) Subscribe(charID int64, settings *NotificationSettings) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if _, exists := s.subscriptions[charID]; exists {
+		// If already subscribed, just update settings.
+		logger.Sugar.Debugf("Updating settings for already subscribed character %d.", charID)
+		s.subscriptions[charID] = settings
+		return
+	}
+
 	logger.Sugar.Infof("Subscribing character %d with specified settings.", charID)
 	s.subscriptions[charID] = settings
+
+	s.Subscribed <- charID
 }
 
 // Unsubscribe deactivates all notifications for a character.
 func (s *Service) Unsubscribe(charID int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	logger.Sugar.Infof("Unsubscribing character %d", charID)
-	delete(s.subscriptions, charID)
+
+	if _, exists := s.subscriptions[charID]; exists {
+		logger.Sugar.Infof("Unsubscribing character %d", charID)
+		delete(s.subscriptions, charID)
+		// Announce the unsubscription.
+		s.Unsubscribed <- charID
+	}
+
 }
 
 // IsSubscribed checks if a character is currently subscribed.
