@@ -35,7 +35,7 @@ func main() {
 	configService.Init()
 
 	mainWindow := window.NewMainWindow(mainApp, characaterService, subService, notificationService)
-	settingsWindow := window.NewSettingsWindow(mainApp, configService)
+	settingsWindow := window.NewSettingsWindow(mainApp, configService, notificationService)
 
 
 

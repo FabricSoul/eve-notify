@@ -39,6 +39,7 @@
         atk
         dbus
         libayatana-appindicator
+        alsa-lib
       ];
     in {
       devShell = pkgs.mkShell {

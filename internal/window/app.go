@@ -197,7 +197,7 @@ func NewMainWindow(app fyne.App, charSvc *character.Service, subSvc *subscriptio
 
 
 // NewSettingsWindow has been completely redesigned for a professional look.
-func NewSettingsWindow(app fyne.App, cfg *config.Service) fyne.Window {
+func NewSettingsWindow(app fyne.App, cfg *config.Service, notifSvc *notification.Service) fyne.Window {
 	logger.Sugar.Debugln("Creating settings window UI.")
 	window := app.NewWindow("Settings")
 
@@ -233,10 +233,17 @@ func NewSettingsWindow(app fyne.App, cfg *config.Service) fyne.Window {
 		folderDialog.Show()
 	})
 
+	testSoundButton := widget.NewButton("Test Sound", func() {
+		logger.Sugar.Infoln("User clicked 'Test Sound' button.")
+		// IMPORTANT: Run in a goroutine to avoid freezing the UI.
+		go notifSvc.PlaySound()
+	})
+
 	pathWidget := container.NewBorder(nil, nil, nil, changePathButton, logPathValue)
 
 	form := widget.NewForm(
 		widget.NewFormItem("EVE Log Path", pathWidget),
+		widget.NewFormItem("Audio Output", testSoundButton),
 	)
 
 	btnClose := widget.NewButton("Close", func() {

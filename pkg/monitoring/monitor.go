@@ -82,29 +82,42 @@ func (m *characterMonitor) checkForNewLogs() {
 		return
 	}
 
-	logPath := m.configSvc.GetLogPath()
+	// --- CORRECTED GAMELOG LOGIC ---
+	// First, determine if the gamelog worker should be running at all.
+	isGamelogMonitoringNeeded := settings.MiningStorageFull || settings.ManualAutopilot // Add future Gamelog settings here
 
-	// --- Check Gamelogs ---
-	if settings.MiningStorageFull { // Check if we even need to monitor this
+	if isGamelogMonitoringNeeded {
+		// If it should be running, find the latest log file.
+		logPath := m.configSvc.GetLogPath()
 		gamelogDir := filepath.Join(logPath, "Gamelogs")
 		latestGamelog := m.findLatestLog(gamelogDir, fmt.Sprintf(`^\d{8}_\d{6}_%d\.txt$`, m.charID))
 
+		// Only act if we found a file AND it's a different one than we're currently watching.
 		if latestGamelog != "" && latestGamelog != m.activeGamelogFile {
-			logger.Sugar.Infof("[%d] New gamelog detected: %s", m.charID, filepath.Base(latestGamelog))
+			logger.Sugar.Infof("[%d] New gamelog detected for monitoring: %s", m.charID, filepath.Base(latestGamelog))
 
-			// Stop the old worker if it exists
+			// Stop the old worker if it's running.
 			if m.cancelActiveGamelog != nil {
 				m.cancelActiveGamelog()
 			}
 
-			// Start the new worker
+			// Start the new, generalized worker.
 			workerCtx, workerCancel := context.WithCancel(m.ctx)
 			m.activeGamelogFile = latestGamelog
 			m.cancelActiveGamelog = workerCancel
-
-			go m.miningWorker(workerCtx, latestGamelog)
+			go m.gamelogWorker(workerCtx, latestGamelog, settings)
+		}
+	} else {
+		// If no Gamelog monitoring is needed, ensure the worker is stopped.
+		if m.cancelActiveGamelog != nil {
+			logger.Sugar.Infof("[%d] Disabling gamelog worker as no relevant notifications are active.", m.charID)
+			m.cancelActiveGamelog()
+			m.cancelActiveGamelog = nil
+			m.activeGamelogFile = ""
 		}
 	}
+
+	// Future: Add checks for Chatlogs here in a similar `if/else` block.
 }
 
 // findLatestLog scans a directory for files matching a pattern and returns the path of the most recent one.
