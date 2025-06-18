@@ -26,7 +26,7 @@ func main() {
 	configService := config.NewService(mainApp)
 	subService := subscription.NewService()
 	characaterService := character.NewService(mainApp,  configService, subService)
-	notificationService := notification.NewService()
+	notificationService := notification.NewService(mainApp)
 	monitoringService := monitoring.NewService(configService, subService, notificationService)
 
 	go monitoringService.Start()

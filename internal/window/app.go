@@ -24,40 +24,83 @@ func NewApp() fyne.App {
 	return app.NewWithID("eve-notify")
 }
 
+type refreshResult struct {
+	characters []*character.Character
+	err        error
+}
+
+
 func NewMainWindow(app fyne.App, charSvc *character.Service, subSvc *subscription.Service, notifSvc *notification.Service) fyne.Window {
 	window := app.NewWindow("EVE Notify - Dashboard")
+
 	charData := binding.NewUntypedList()
-	var buildRightPane func(char *character.Character)
 	rightPane := container.NewVBox(widget.NewLabel("Select a character to configure notifications."))
 
-	charList := widget.NewListWithData(charData,
-		func() fyne.CanvasObject { /* ... */
-			icon := widget.NewIcon(theme.ConfirmIcon()); icon.Hide()
-			return container.NewHBox(icon, widget.NewLabel("Template"))
+	// --- PRE-DECLARE VARIABLES for use in closures ---
+	var buildRightPane func(char *character.Character)
+	var charList *widget.List // <-- THE FIX: Pre-declare charList here
+
+	// --- CONCURRENCY-SAFE REFRESH MECHANISM ---
+	resultChan := make(chan refreshResult)
+
+	refreshCharsWorker := func() {
+		logger.Sugar.Infoln("Worker: Refreshing character list...")
+		chars, err := charSvc.GetCharacters()
+		resultChan <- refreshResult{characters: chars, err: err}
+	}
+
+	go func() {
+		for res := range resultChan {
+			if res.err != nil {
+				logger.Sugar.Errorf("Failed to refresh characters: %v", res.err)
+				dialog.ShowError(res.err, window)
+				continue
+			}
+
+			logger.Sugar.Infoln("UI: Received new character data, updating list.")
+
+			// charList is now available here because it was pre-declared.
+			charList.UnselectAll()
+
+			charItems := make([]interface{}, len(res.characters))
+			for i, v := range res.characters {
+				charItems[i] = v
+			}
+			charData.Set(charItems)
+		}
+	}()
+	// --- END OF CONCURRENCY MECHANISM ---
+
+	// Create the list widget and ASSIGN it to our pre-declared variable.
+	charList = widget.NewListWithData(charData,
+		func() fyne.CanvasObject {
+			icon := widget.NewIcon(theme.ConfirmIcon())
+			icon.Hide()
+			return container.NewHBox(icon, widget.NewLabel("Template Character"))
 		},
-		func(i binding.DataItem, o fyne.CanvasObject) { /* ... */
+		func(i binding.DataItem, o fyne.CanvasObject) {
 			item, _ := i.(binding.Untyped).Get()
 			char := item.(*character.Character)
 			hbox := o.(*fyne.Container)
 			icon := hbox.Objects[0].(*widget.Icon)
 			label := hbox.Objects[1].(*widget.Label)
 			label.SetText(char.Name)
-			if subSvc.IsSubscribed(char.ID) { icon.Show() } else { icon.Hide() }
+			if subSvc.IsSubscribed(char.ID) {
+				icon.Show()
+			} else {
+				icon.Hide()
+			}
 		},
 	)
 
+	// ASSIGN the function body to our pre-declared variable.
 	buildRightPane = func(char *character.Character) {
-		// Get current settings if they exist, otherwise create a new temporary struct.
 		settings, isSubscribed := subSvc.GetSettings(char.ID)
 		if !isSubscribed {
 			settings = &subscription.NotificationSettings{}
 		}
-
 		charNameLabel := widget.NewLabel(fmt.Sprintf("Notifications for: %s", char.Name))
 		charNameLabel.TextStyle.Bold = true
-
-		// Create checks that only modify the local 'settings' struct.
-		// The service is not updated until the user clicks "Subscribe".
 		check1 := widget.NewCheck("Alliance chat mentions", func(b bool) { settings.AllianceChat = b })
 		check2 := widget.NewCheck("Corp chat mentions", func(b bool) { settings.CorpChat = b })
 		check3 := widget.NewCheck("Local chat mentions", func(b bool) { settings.LocalChat = b })
@@ -65,128 +108,57 @@ func NewMainWindow(app fyne.App, charSvc *character.Service, subSvc *subscriptio
 		check5 := widget.NewCheck("NPC agression stopped", func(b bool) { settings.NpcAggression = b })
 		check6 := widget.NewCheck("Player agression", func(b bool) { settings.PlayerAggression = b })
 		check7 := widget.NewCheck("Manual Autopilot", func(b bool) { settings.ManualAutopilot = b })
-
-		// Set initial check state from the settings struct
 		check1.SetChecked(settings.AllianceChat); check2.SetChecked(settings.CorpChat); check3.SetChecked(settings.LocalChat)
 		check4.SetChecked(settings.MiningStorageFull); check5.SetChecked(settings.NpcAggression); check6.SetChecked(settings.PlayerAggression)
 		check7.SetChecked(settings.ManualAutopilot)
-
 		formContainer := container.NewVBox(check1, check2, check3, check4, check5, check6, check7)
-
-		// --- REVERSED LOGIC ---
-		// The form is ENABLED if the character is NOT subscribed.
 		setContainerEnabled(formContainer, !isSubscribed)
 
 		var actionButton *widget.Button
 		if isSubscribed {
 			actionButton = widget.NewButtonWithIcon("Unsubscribe", theme.CancelIcon(), func() {
 				subSvc.Unsubscribe(char.ID)
-				buildRightPane(char) // Rebuild the pane
-				charSvc.GetCharacters() // Trigger a re-sort
-				charList.Refresh()
+				go refreshCharsWorker()
 			})
 		} else {
 			actionButton = widget.NewButtonWithIcon("Subscribe", theme.ConfirmIcon(), func() {
-				// The button now passes the locally configured settings to the service.
 				subSvc.Subscribe(char.ID, settings)
-				buildRightPane(char) // Rebuild the pane
-				charSvc.GetCharacters() // Trigger a re-sort
-				charList.Refresh()
+				notifSvc.Notify("Subscription Active", fmt.Sprintf("Now monitoring notifications for %s.", char.Name), false)
+				go refreshCharsWorker()
 			})
 		}
-
 		rightPane.Objects = []fyne.CanvasObject{
 			charNameLabel, widget.NewSeparator(), formContainer, layout.NewSpacer(), actionButton,
 		}
 		rightPane.Refresh()
 	}
 
-	// The refresh function needs to re-fetch and re-sort the data now
-	refreshChars := func() {
-		logger.Sugar.Infoln("Refreshing character list...")
-		charList.UnselectAll()
-
-		chars, err := charSvc.GetCharacters() // This now returns a sorted list
-		if err != nil {
-			logger.Sugar.Errorf("Failed to refresh characters: %v", err)
-			dialog.ShowError(err, window)
+	charList.OnSelected = func(id widget.ListItemID) {
+		if id < 0 || id >= charData.Length() {
 			return
 		}
-
-		charItems := make([]interface{}, len(chars))
-		for i, v := range chars {
-			charItems[i] = v
-		}
-		charData.Set(charItems)
-	}
-
-	// When the user clicks the action buttons, the list data doesn't change,
-	// only the sort order. We need to explicitly re-run the refresh.
-	// We'll slightly modify the action button handlers to do this.
-
-	// Re-assign buildRightPane with the refresh call included.
-	buildRightPane = func(char *character.Character) {
-		// ... (previous buildRightPane code is identical)
-		settings, isSubscribed := subSvc.GetSettings(char.ID)
-		if !isSubscribed {
-			settings = &subscription.NotificationSettings{}
-		}
-		charNameLabel := widget.NewLabel(fmt.Sprintf("Notifications for: %s", char.Name))
-		charNameLabel.TextStyle.Bold = true
-		check1 := widget.NewCheck("Alliance chat mentions", func(b bool) { settings.AllianceChat = b })
-		check2 := widget.NewCheck("Corp chat mentions", func(b bool) { settings.CorpChat = b })
-		check3 := widget.NewCheck("Local chat mentions", func(b bool) { settings.LocalChat = b })
-		check4 := widget.NewCheck("Mining storage full", func(b bool) { settings.MiningStorageFull = b })
-		check5 := widget.NewCheck("NPC agression stopped", func(b bool) { settings.NpcAggression = b })
-		check6 := widget.NewCheck("Player agression", func(b bool) { settings.PlayerAggression = b })
-		check7 := widget.NewCheck("Manual Autopilot", func(b bool) { settings.ManualAutopilot = b })
-		check1.SetChecked(settings.AllianceChat); check2.SetChecked(settings.CorpChat); check3.SetChecked(settings.LocalChat)
-		check4.SetChecked(settings.MiningStorageFull); check5.SetChecked(settings.NpcAggression); check6.SetChecked(settings.PlayerAggression)
-		check7.SetChecked(settings.ManualAutopilot)
-		formContainer := container.NewVBox(check1, check2, check3, check4, check5, check6, check7)
-		setContainerEnabled(formContainer, !isSubscribed)
-
-		var actionButton *widget.Button
-		if isSubscribed {
-			actionButton = widget.NewButtonWithIcon("Unsubscribe", theme.CancelIcon(), func() {
-				subSvc.Unsubscribe(char.ID)
-				refreshChars() // This will re-sort and update the UI
-				// Find this char in the new list and re-select it
-			})
-		} else {
-			actionButton = widget.NewButtonWithIcon("Subscribe", theme.ConfirmIcon(), func() {
-				subSvc.Subscribe(char.ID, settings)
-				title := "Subscription Active"
-				message := fmt.Sprintf("Now monitoring notifications for %s.", char.Name)
-				notifSvc.Notify(title, message, false)
-				refreshChars() // This will re-sort and update the UI
-				// Find this char in the new list and re-select it
-			})
-		}
-		rightPane.Objects = []fyne.CanvasObject{
-			charNameLabel, widget.NewSeparator(), formContainer, layout.NewSpacer(), actionButton,
-		}
-		rightPane.Refresh()
-	}
-
-	// ... OnSelected, OnUnselected, refreshChars, layout are the same ...
-	charList.OnSelected = func(id widget.ListItemID) {
-		if id < 0 || id >= charData.Length() { return }
 		item, _ := charData.GetValue(id)
 		buildRightPane(item.(*character.Character))
 	}
+
 	charList.OnUnselected = func(widget.ListItemID) {
 		rightPane.Objects = []fyne.CanvasObject{widget.NewLabel("Select a character to configure notifications.")}
 		rightPane.Refresh()
 	}
 
-	refreshButton := widget.NewButton("Refresh", refreshChars)
+	refreshButton := widget.NewButton("Refresh", func() {
+		go refreshCharsWorker()
+	})
 	leftPane := container.NewBorder(container.NewVBox(widget.NewLabel("Characters"), widget.NewSeparator()), refreshButton, nil, nil, charList)
+
 	split := container.NewHSplit(leftPane, container.NewPadded(rightPane))
 	split.Offset = 0.3
+
 	window.SetContent(split)
 	window.Resize(fyne.NewSize(1280, 720))
-	go refreshChars()
+
+	go refreshCharsWorker()
+
 	window.SetCloseIntercept(func() {
 		logger.Sugar.Infoln("Main window closed by user, hiding to tray.")
 		window.Hide()
