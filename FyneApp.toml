@@ -1,9 +1,9 @@
 [Details]
-  Name = "eve-notify"
-  Icon = "Icon.png"
-  ID = "eve-notify"
-  Version = "0.0.0"
-  Build = 0
+Name = "eve-notify"
+Icon = "Icon.png"
+ID = "eve-notify"
+Version = "0.0.1"
+Build = 0
 
 [Migrations]
-  fyneDo = true
+fyneDo = true
