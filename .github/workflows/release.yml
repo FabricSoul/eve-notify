@@ -67,7 +67,7 @@ jobs:
           go-version: "1.24.3"
 
       - name: Install fyne-cross
-        run: go install github.com/fyne-io/fyne-cross/v2@latest
+        run: go install github.com/fyne-io/fyne-cross/@latest
 
       - name: Run fyne-cross build
         # We run the command without any environment variables for signing.
