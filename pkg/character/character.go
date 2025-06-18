@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2"
 	"github.com/FabricSoul/eve-notify/pkg/config"
 	"github.com/FabricSoul/eve-notify/pkg/esi"
+	"github.com/FabricSoul/eve-notify/pkg/subscription"
 	"github.com/FabricSoul/eve-notify/pkg/logger"
 )
 
@@ -20,19 +21,22 @@ type Character struct {
 	ID       int64
 	Name     string
 	LastSeen time.Time // Used for sorting
+	IsSubscribed bool
 }
 
 // Service handles all character-related logic.
 type Service struct {
 	prefs       fyne.Preferences
 	configSvc *config.Service
+	subSvc    *subscription.Service
 }
 
 // NewService creates a new character service.
-func NewService(app fyne.App, cfg *config.Service) *Service {
+func NewService(app fyne.App, cfg *config.Service, subSvc *subscription.Service) *Service {
 	return &Service{
 		prefs:       app.Preferences(),
 		configSvc: cfg,
+		subSvc: subSvc,
 	}
 }
 
@@ -55,51 +59,41 @@ func (s *Service) GetCharacters() ([]*Character, error) {
 		return nil, fmt.Errorf("could not read Gamelogs directory: %w", err)
 	}
 
-	// Use a map to store the most recent log time for each unique character ID.
 	charLatestTime := make(map[int64]time.Time)
-
 	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-
+		if file.IsDir() { continue }
 		matches := logFileRegex.FindStringSubmatch(file.Name())
-		if len(matches) != 3 {
-			continue // Filename doesn't match the pattern with an ID.
-		}
-
-		// Parse timestamp and character ID
+		if len(matches) != 3 { continue }
 		timestampStr, charIDStr := matches[1], matches[2]
 		charID, _ := strconv.ParseInt(charIDStr, 10, 64)
 		logTime, err := time.Parse("20060102_150405", timestampStr)
-		if err != nil {
-			logger.Sugar.Warnf("Could not parse timestamp from log file '%s': %v", file.Name(), err)
-			continue
-		}
-
-		// If this log is more recent, update the character's last seen time.
+		if err != nil { continue }
 		if logTime.After(charLatestTime[charID]) {
 			charLatestTime[charID] = logTime
 		}
 	}
 
-	// Build the final list of characters.
 	var characters []*Character
 	for id, lastSeen := range charLatestTime {
 		name := s.getCharacterName(id)
 		characters = append(characters, &Character{
-			ID:       id,
-			Name:     name,
-			LastSeen: lastSeen,
+			ID:           id,
+			Name:         name,
+			LastSeen:     lastSeen,
+			IsSubscribed: s.subSvc.IsSubscribed(id),
 		})
 	}
 
-	// Sort characters by LastSeen time, descending (most recent first).
+	// Sort by subscription status (true first), then by last seen time (desc).
 	sort.Slice(characters, func(i, j int) bool {
+		if characters[i].IsSubscribed != characters[j].IsSubscribed {
+			return characters[i].IsSubscribed // true comes before false
+		}
+		// If both have the same subscription status, sort by LastSeen
 		return characters[i].LastSeen.After(characters[j].LastSeen)
 	})
 
-	logger.Sugar.Infof("Found %d unique characters.", len(characters))
+	logger.Sugar.Infof("Found and sorted %d unique characters.", len(characters))
 	return characters, nil
 }
 

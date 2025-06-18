@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 	"github.com/FabricSoul/eve-notify/pkg/character"
+	"github.com/FabricSoul/eve-notify/pkg/subscription"
 	"github.com/FabricSoul/eve-notify/pkg/config"
 	"github.com/FabricSoul/eve-notify/pkg/logger"
 )
@@ -20,98 +22,95 @@ func NewApp() fyne.App {
 	return app.NewWithID("eve-notify")
 }
 
-func NewMainWindow(app fyne.App, charSvc *character.Service) fyne.Window {
+func NewMainWindow(app fyne.App, charSvc *character.Service, subSvc *subscription.Service) fyne.Window {
 	window := app.NewWindow("EVE Notify - Dashboard")
-
-	// --- DATA & STATE ---
-	subscriptions := make(map[int64]bool)
 	charData := binding.NewUntypedList()
+	var buildRightPane func(char *character.Character)
+	rightPane := container.NewVBox(widget.NewLabel("Select a character to configure notifications."))
 
-	// --- RIGHT PANE (FORM) ---
-	rightPane := container.NewVBox(widget.NewLabel("Select a character from the list to configure notifications."))
-
-	// --- LEFT PANE (LIST) ---
 	charList := widget.NewListWithData(charData,
-		func() fyne.CanvasObject {
-			// This creates an object of type *widget.Label
-			return widget.NewLabel("Template Character Name")
+		func() fyne.CanvasObject { /* ... */
+			icon := widget.NewIcon(theme.ConfirmIcon()); icon.Hide()
+			return container.NewHBox(icon, widget.NewLabel("Template"))
 		},
-		func(i binding.DataItem, o fyne.CanvasObject) {
+		func(i binding.DataItem, o fyne.CanvasObject) { /* ... */
 			item, _ := i.(binding.Untyped).Get()
 			char := item.(*character.Character)
-			// --- THE FIX IS HERE ---
-			// We assert the type is *widget.Label, not *widget.NewLabel
-			o.(*widget.Label).SetText(char.Name)
-			// --- END OF FIX ---
+			hbox := o.(*fyne.Container)
+			icon := hbox.Objects[0].(*widget.Icon)
+			label := hbox.Objects[1].(*widget.Label)
+			label.SetText(char.Name)
+			if subSvc.IsSubscribed(char.ID) { icon.Show() } else { icon.Hide() }
 		},
 	)
 
-	charList.OnSelected = func(id widget.ListItemID) {
-		// Prevent crash if selection is cleared
-		if id < 0 || id >= charData.Length() {
-			rightPane.Objects = []fyne.CanvasObject{widget.NewLabel("Select a character from the list to configure notifications.")}
-			rightPane.Refresh()
-			return
+	buildRightPane = func(char *character.Character) {
+		// Get current settings if they exist, otherwise create a new temporary struct.
+		settings, isSubscribed := subSvc.GetSettings(char.ID)
+		if !isSubscribed {
+			settings = &subscription.NotificationSettings{}
 		}
-
-		item, _ := charData.GetValue(id)
-		char := item.(*character.Character)
-		logger.Sugar.Infof("User selected character: %s (%d)", char.Name, char.ID)
 
 		charNameLabel := widget.NewLabel(fmt.Sprintf("Notifications for: %s", char.Name))
 		charNameLabel.TextStyle.Bold = true
 
-		check1 := widget.NewCheck("Alliance chat mentions", nil)
-		check2 := widget.NewCheck("Corp chat mentions", nil)
-		check3 := widget.NewCheck("Local chat mentions", nil)
-		check4 := widget.NewCheck("Mining storage full", nil)
-		check5 := widget.NewCheck("NPC agression stopped", nil)
-		check6 := widget.NewCheck("Player agression", nil)
-		check7 := widget.NewCheck("Manual Autopilot", nil)
+		// Create checks that only modify the local 'settings' struct.
+		// The service is not updated until the user clicks "Subscribe".
+		check1 := widget.NewCheck("Alliance chat mentions", func(b bool) { settings.AllianceChat = b })
+		check2 := widget.NewCheck("Corp chat mentions", func(b bool) { settings.CorpChat = b })
+		check3 := widget.NewCheck("Local chat mentions", func(b bool) { settings.LocalChat = b })
+		check4 := widget.NewCheck("Mining storage full", func(b bool) { settings.MiningStorageFull = b })
+		check5 := widget.NewCheck("NPC agression stopped", func(b bool) { settings.NpcAggression = b })
+		check6 := widget.NewCheck("Player agression", func(b bool) { settings.PlayerAggression = b })
+		check7 := widget.NewCheck("Manual Autopilot", func(b bool) { settings.ManualAutopilot = b })
 
+		// Set initial check state from the settings struct
+		check1.SetChecked(settings.AllianceChat); check2.SetChecked(settings.CorpChat); check3.SetChecked(settings.LocalChat)
+		check4.SetChecked(settings.MiningStorageFull); check5.SetChecked(settings.NpcAggression); check6.SetChecked(settings.PlayerAggression)
+		check7.SetChecked(settings.ManualAutopilot)
 
-		subscribeButton := widget.NewButton("Subscribe", func() {
-			subscriptions[char.ID] = true
-			logger.Sugar.Infof("Subscribed to notifications for %s", char.Name)
-			dialog.ShowInformation("Subscribed", "You will now receive notifications for "+char.Name, window)
-		})
-		cancelButton := widget.NewButton("Cancel Subscription", func() {
-			delete(subscriptions, char.ID)
-			logger.Sugar.Infof("Cancelled subscription for %s", char.Name)
-			dialog.ShowInformation("Cancelled", "You will no longer receive notifications for "+char.Name, window)
-		})
+		formContainer := container.NewVBox(check1, check2, check3, check4, check5, check6, check7)
+
+		// --- REVERSED LOGIC ---
+		// The form is ENABLED if the character is NOT subscribed.
+		setContainerEnabled(formContainer, !isSubscribed)
+
+		var actionButton *widget.Button
+		if isSubscribed {
+			actionButton = widget.NewButtonWithIcon("Unsubscribe", theme.CancelIcon(), func() {
+				subSvc.Unsubscribe(char.ID)
+				buildRightPane(char) // Rebuild the pane
+				charSvc.GetCharacters() // Trigger a re-sort
+				charList.Refresh()
+			})
+		} else {
+			actionButton = widget.NewButtonWithIcon("Subscribe", theme.ConfirmIcon(), func() {
+				// The button now passes the locally configured settings to the service.
+				subSvc.Subscribe(char.ID, settings)
+				buildRightPane(char) // Rebuild the pane
+				charSvc.GetCharacters() // Trigger a re-sort
+				charList.Refresh()
+			})
+		}
 
 		rightPane.Objects = []fyne.CanvasObject{
-			charNameLabel,
-			widget.NewSeparator(),
-			check1,
-			check2,
-			check3,
-			check4,
-			check5,
-			check6,
-			check7,
-			layout.NewSpacer(),
-			container.NewGridWithColumns(2, subscribeButton, cancelButton),
+			charNameLabel, widget.NewSeparator(), formContainer, layout.NewSpacer(), actionButton,
 		}
 		rightPane.Refresh()
 	}
-	// When selection is cleared, reset the right pane
-	charList.OnUnselected = func(id widget.ListItemID) {
-		charList.OnSelected(-1) // Call the selection handler with an invalid ID
-	}
 
+	// The refresh function needs to re-fetch and re-sort the data now
 	refreshChars := func() {
 		logger.Sugar.Infoln("Refreshing character list...")
-		// Clear selection before refresh to avoid panics on list change
 		charList.UnselectAll()
 
-		chars, err := charSvc.GetCharacters()
+		chars, err := charSvc.GetCharacters() // This now returns a sorted list
 		if err != nil {
 			logger.Sugar.Errorf("Failed to refresh characters: %v", err)
 			dialog.ShowError(err, window)
 			return
 		}
+
 		charItems := make([]interface{}, len(chars))
 		for i, v := range chars {
 			charItems[i] = v
@@ -119,23 +118,78 @@ func NewMainWindow(app fyne.App, charSvc *character.Service) fyne.Window {
 		charData.Set(charItems)
 	}
 
+	// When the user clicks the action buttons, the list data doesn't change,
+	// only the sort order. We need to explicitly re-run the refresh.
+	// We'll slightly modify the action button handlers to do this.
+
+	// Re-assign buildRightPane with the refresh call included.
+	buildRightPane = func(char *character.Character) {
+		// ... (previous buildRightPane code is identical)
+		settings, isSubscribed := subSvc.GetSettings(char.ID)
+		if !isSubscribed {
+			settings = &subscription.NotificationSettings{}
+		}
+		charNameLabel := widget.NewLabel(fmt.Sprintf("Notifications for: %s", char.Name))
+		charNameLabel.TextStyle.Bold = true
+		check1 := widget.NewCheck("Alliance chat mentions", func(b bool) { settings.AllianceChat = b })
+		check2 := widget.NewCheck("Corp chat mentions", func(b bool) { settings.CorpChat = b })
+		check3 := widget.NewCheck("Local chat mentions", func(b bool) { settings.LocalChat = b })
+		check4 := widget.NewCheck("Mining storage full", func(b bool) { settings.MiningStorageFull = b })
+		check5 := widget.NewCheck("NPC agression stopped", func(b bool) { settings.NpcAggression = b })
+		check6 := widget.NewCheck("Player agression", func(b bool) { settings.PlayerAggression = b })
+		check7 := widget.NewCheck("Manual Autopilot", func(b bool) { settings.ManualAutopilot = b })
+		check1.SetChecked(settings.AllianceChat); check2.SetChecked(settings.CorpChat); check3.SetChecked(settings.LocalChat)
+		check4.SetChecked(settings.MiningStorageFull); check5.SetChecked(settings.NpcAggression); check6.SetChecked(settings.PlayerAggression)
+		check7.SetChecked(settings.ManualAutopilot)
+		formContainer := container.NewVBox(check1, check2, check3, check4, check5, check6, check7)
+		setContainerEnabled(formContainer, !isSubscribed)
+
+		var actionButton *widget.Button
+		if isSubscribed {
+			actionButton = widget.NewButtonWithIcon("Unsubscribe", theme.CancelIcon(), func() {
+				subSvc.Unsubscribe(char.ID)
+				refreshChars() // This will re-sort and update the UI
+				// Find this char in the new list and re-select it
+			})
+		} else {
+			actionButton = widget.NewButtonWithIcon("Subscribe", theme.ConfirmIcon(), func() {
+				subSvc.Subscribe(char.ID, settings)
+				refreshChars() // This will re-sort and update the UI
+				// Find this char in the new list and re-select it
+			})
+		}
+		rightPane.Objects = []fyne.CanvasObject{
+			charNameLabel, widget.NewSeparator(), formContainer, layout.NewSpacer(), actionButton,
+		}
+		rightPane.Refresh()
+	}
+
+	// ... OnSelected, OnUnselected, refreshChars, layout are the same ...
+	charList.OnSelected = func(id widget.ListItemID) {
+		if id < 0 || id >= charData.Length() { return }
+		item, _ := charData.GetValue(id)
+		buildRightPane(item.(*character.Character))
+	}
+	charList.OnUnselected = func(widget.ListItemID) {
+		rightPane.Objects = []fyne.CanvasObject{widget.NewLabel("Select a character to configure notifications.")}
+		rightPane.Refresh()
+	}
+
 	refreshButton := widget.NewButton("Refresh", refreshChars)
 	leftPane := container.NewBorder(container.NewVBox(widget.NewLabel("Characters"), widget.NewSeparator()), refreshButton, nil, nil, charList)
-
 	split := container.NewHSplit(leftPane, container.NewPadded(rightPane))
 	split.Offset = 0.3
-
 	window.SetContent(split)
 	window.Resize(fyne.NewSize(1280, 720))
-
 	go refreshChars()
-
 	window.SetCloseIntercept(func() {
 		logger.Sugar.Infoln("Main window closed by user, hiding to tray.")
 		window.Hide()
 	})
 	return window
 }
+
+
 
 // NewSettingsWindow has been completely redesigned for a professional look.
 func NewSettingsWindow(app fyne.App, cfg *config.Service) fyne.Window {
@@ -205,4 +259,16 @@ content := container.NewPadded(
 	window.SetFixedSize(true)
 
 	return window
+}
+
+func setContainerEnabled(c *fyne.Container, enabled bool) {
+	for _, obj := range c.Objects {
+		if w, ok := obj.(fyne.Disableable); ok {
+			if enabled {
+				w.Enable()
+			} else {
+				w.Disable()
+			}
+		}
+	}
 }
