@@ -1,0 +1,85 @@
+name: Build and Release with fyne-cross
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  # Job 1: Create a draft GitHub Release.
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          body: |
+            Automated release for ${{ github.ref_name }}.
+
+            **Artifacts:**
+            - Windows (amd64) - .exe in a .zip
+            - Linux (amd64) - .tar.gz
+            - macOS (Universal) - .dmg
+
+            **Note for macOS users:** This application is not signed by an Apple Developer. To run it, you may need to right-click the application icon and select "Open".
+          draft: true
+          prerelease: false
+
+  # Job 2: Build for each platform in parallel and upload to the release.
+  build-and-upload:
+    name: Build & Upload with fyne-cross
+    needs: create-release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: "linux"
+            arch: "amd64"
+            output_name: "eve-notify"
+            asset_name: "eve-notify-linux-amd64.tar.gz"
+            asset_content_type: "application/gzip"
+          - target: "windows"
+            arch: "amd64"
+            output_name: "eve-notify.exe"
+            asset_name: "eve-notify-windows-amd64.zip"
+            asset_content_type: "application/zip"
+          - target: "darwin"
+            arch: "amd64,arm64" # Universal binary
+            output_name: "eve-notify.app"
+            asset_name: "eve-notify-macos-universal.dmg"
+            asset_content_type: "application/x-apple-diskimage"
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.3"
+
+      - name: Install fyne-cross
+        run: go install github.com/fyne-io/fyne-cross/v2@latest
+
+      - name: Run fyne-cross build
+        # We run the command without any environment variables for signing.
+        # fyne-cross will build and package an unsigned .dmg for macOS.
+        run: fyne-cross ${{ matrix.target }} -arch=${{ matrix.arch }} -output=${{ matrix.output_name }}
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./fyne-cross/dist/${{ matrix.target }}-${{ matrix.arch == 'amd64,arm64' && 'universal' || matrix.arch}}/${{ matrix.asset_name }}
+          asset_name: ${{ matrix.asset_name }}
+          asset_content_type: ${{ matrix.asset_content_type }}
