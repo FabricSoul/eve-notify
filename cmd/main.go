@@ -10,6 +10,7 @@ import (
 	"github.com/FabricSoul/eve-notify/pkg/config"
 	"github.com/FabricSoul/eve-notify/pkg/logger"
 	"github.com/FabricSoul/eve-notify/pkg/monitoring"
+	"github.com/FabricSoul/eve-notify/pkg/notification"
 	"github.com/FabricSoul/eve-notify/pkg/subscription"
 	// We no longer need to import "github.com/getlantern/systray"
 )
@@ -25,14 +26,15 @@ func main() {
 	configService := config.NewService(mainApp)
 	subService := subscription.NewService()
 	characaterService := character.NewService(mainApp,  configService, subService)
-	monitoringService := monitoring.NewService(configService, subService)
+	notificationService := notification.NewService()
+	monitoringService := monitoring.NewService(configService, subService, notificationService)
 
 	go monitoringService.Start()
 	defer monitoringService.Stop()
 
 	configService.Init()
 
-	mainWindow := window.NewMainWindow(mainApp, characaterService, subService)
+	mainWindow := window.NewMainWindow(mainApp, characaterService, subService, notificationService)
 	settingsWindow := window.NewSettingsWindow(mainApp, configService)
 
 

@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/FabricSoul/eve-notify/pkg/config"
-	"github.com/FabricSoul/eve-notify/pkg/subscription"
 	"github.com/FabricSoul/eve-notify/pkg/logger"
+	"github.com/FabricSoul/eve-notify/pkg/notification"
+	"github.com/FabricSoul/eve-notify/pkg/subscription"
 )
 
 // characterMonitor listens for log file changes for a single character.
@@ -18,6 +19,7 @@ type characterMonitor struct {
 	charID    int64
 	configSvc *config.Service
 	subSvc    *subscription.Service
+	notifSvc *notification.Service
 	ctx       context.Context
 	cancel    context.CancelFunc
 
@@ -27,13 +29,14 @@ type characterMonitor struct {
 	// ... add other logs like Chatlogs here ...
 }
 
-func newCharacterMonitor(ctx context.Context, charID int64, cfg *config.Service, sub *subscription.Service) *characterMonitor {
+func newCharacterMonitor(ctx context.Context, charID int64, cfg *config.Service, sub *subscription.Service, notifi *notification.Service) *characterMonitor {
 	// Create a new context for this monitor that is a child of the service's context.
 	monitorCtx, monitorCancel := context.WithCancel(ctx)
 	return &characterMonitor{
 		charID:    charID,
 		configSvc: cfg,
 		subSvc:    sub,
+		notifSvc: notifi,
 		ctx:       monitorCtx,
 		cancel:    monitorCancel,
 	}

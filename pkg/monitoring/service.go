@@ -5,25 +5,28 @@ import (
 	"sync"
 
 	"github.com/FabricSoul/eve-notify/pkg/config"
-	"github.com/FabricSoul/eve-notify/pkg/subscription"
 	"github.com/FabricSoul/eve-notify/pkg/logger"
+	"github.com/FabricSoul/eve-notify/pkg/notification"
+	"github.com/FabricSoul/eve-notify/pkg/subscription"
 )
 
 // Service is the main monitoring controller.
 type Service struct {
 	configSvc *config.Service
 	subSvc    *subscription.Service
+	notifSvc  *notification.Service
 	monitors  map[int64]*characterMonitor
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 }
 
-func NewService(cfg *config.Service, sub *subscription.Service) *Service {
+func NewService(cfg *config.Service, sub *subscription.Service, notif *notification.Service) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{
 		configSvc: cfg,
 		subSvc:    sub,
+		notifSvc:  notif,
 		monitors:  make(map[int64]*characterMonitor),
 		ctx:       ctx,
 		cancel:    cancel,
@@ -63,7 +66,7 @@ func (s *Service) startMonitor(charID int64) {
 		return
 	}
 	logger.Sugar.Infof("Starting monitor for character %d.", charID)
-	monitor := newCharacterMonitor(s.ctx, charID, s.configSvc, s.subSvc)
+	monitor := newCharacterMonitor(s.ctx, charID, s.configSvc, s.subSvc, s.notifSvc)
 	s.monitors[charID] = monitor
 
 	s.wg.Add(1) // Add to waitgroup for this monitor

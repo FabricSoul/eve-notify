@@ -2,19 +2,21 @@
 package window
 
 import (
+	"fmt"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
-	"fmt"
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/FabricSoul/eve-notify/pkg/character"
-	"github.com/FabricSoul/eve-notify/pkg/subscription"
 	"github.com/FabricSoul/eve-notify/pkg/config"
 	"github.com/FabricSoul/eve-notify/pkg/logger"
+	"github.com/FabricSoul/eve-notify/pkg/notification"
+	"github.com/FabricSoul/eve-notify/pkg/subscription"
 )
 
 // ... NewApp and NewMainWindow remain the same ...
@@ -22,7 +24,7 @@ func NewApp() fyne.App {
 	return app.NewWithID("eve-notify")
 }
 
-func NewMainWindow(app fyne.App, charSvc *character.Service, subSvc *subscription.Service) fyne.Window {
+func NewMainWindow(app fyne.App, charSvc *character.Service, subSvc *subscription.Service, notifSvc *notification.Service) fyne.Window {
 	window := app.NewWindow("EVE Notify - Dashboard")
 	charData := binding.NewUntypedList()
 	var buildRightPane func(char *character.Character)
@@ -154,6 +156,9 @@ func NewMainWindow(app fyne.App, charSvc *character.Service, subSvc *subscriptio
 		} else {
 			actionButton = widget.NewButtonWithIcon("Subscribe", theme.ConfirmIcon(), func() {
 				subSvc.Subscribe(char.ID, settings)
+				title := "Subscription Active"
+				message := fmt.Sprintf("Now monitoring notifications for %s.", char.Name)
+				notifSvc.Notify(title, message, false)
 				refreshChars() // This will re-sort and update the UI
 				// Find this char in the new list and re-select it
 			})

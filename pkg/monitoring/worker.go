@@ -3,6 +3,7 @@ package monitoring
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"regexp"
@@ -49,8 +50,11 @@ func (m *characterMonitor) miningWorker(ctx context.Context, filePath string) {
 
 			line = strings.TrimSpace(line)
 			if miningFullRegex.MatchString(line) {
-				logger.Sugar.Warnf("!!! MINING NOTIFICATION FOR CHAR %d: Cargo is full!", m.charID)
-				// Here is where you would trigger a desktop notification.
+				logger.Sugar.Infof("!!! MINING NOTIFICATION FOR CHAR %d: Cargo is full!", m.charID)
+
+				title := "EVE Notify - Mining"
+				message := fmt.Sprintf("Character %d: Your ship's cargo hold is full.", m.charID)
+				m.notifSvc.Notify(title, message, true)
 			}
 		}
 	}
